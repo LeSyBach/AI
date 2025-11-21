@@ -1,3 +1,4 @@
+
 import React from 'react';
 import { Plus, MessageSquare, Code, Calculator, Image as ImageIcon } from 'lucide-react';
 import { AppMode } from '../types';
@@ -77,7 +78,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentMode, onModeChange, onN
       </div>
 
       {/* User/Logo Footer */}
-      <div className="p-4 border-t border-slate-800/50 bg-[#020617]">
+      <div className="p-4 border-t border-slate-800/50 bg-[#020617] space-y-3">
         <div className="flex items-center gap-3 px-2 py-2 rounded-lg hover:bg-slate-800 transition-colors cursor-pointer group">
           <div className="w-9 h-9 rounded-full bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center text-white font-bold text-sm shadow-md group-hover:shadow-indigo-500/20">B</div>
           <div className="flex flex-col">

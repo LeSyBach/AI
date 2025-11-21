@@ -1,15 +1,16 @@
-
 import { Attachment, Message } from "../types";
 
-// HOSTING CONFIGURATION
-// We use optional chaining (?.) to safely access VITE_API_URL.
-// This prevents the "Cannot read properties of undefined" error if import.meta.env is not defined 
-// (which can happen in some raw ES module environments or specific build setups).
-const API_BASE_URL = (import.meta as any).env?.VITE_API_URL || 'http://localhost:5000/api';
+// API URL pointing to Node.js backend (via Vite proxy in dev, or relative path in prod)
+const API_URL = '/api';
 
-/**
- * Sends a message (text + optional images) to the backend and streams the response.
- */
+export const initChatSession = (systemInstruction: string = "") => {
+  sessionStorage.setItem('bach_ai_instruction', systemInstruction);
+};
+
+export const getSystemInstruction = () => {
+  return sessionStorage.getItem('bach_ai_instruction') || "";
+};
+
 export const streamMessage = async (
   history: Message[],
   message: string, 
@@ -19,109 +20,112 @@ export const streamMessage = async (
   signal?: AbortSignal
 ): Promise<string> => {
   
-  let fullText = "";
+  // 1. Prepare Payload for Node.js Backend
+  // FIX: Send raw history objects instead of pre-formatting them. 
+  // The backend expects objects with { role, content, attachments, etc. }
+  const rawHistory = history.slice(0, -1).map(msg => ({
+    role: msg.role,
+    content: msg.content,
+    attachments: msg.attachments,
+    generatedImage: msg.generatedImage
+  }));
+
+  const payload = {
+    message: message,
+    attachments: attachments,
+    history: rawHistory,
+    systemInstruction: systemInstruction
+  };
 
   try {
-    // Prepare payload for backend
-    // IMPORTANT: We remove the last message from history because 'history' param in App.tsx
-    // already includes the NEW user message. But the backend needs:
-    // 1. Past history (context)
-    // 2. Current message (prompt)
-    // Sending both causes duplication.
-    const historyPayload = history.slice(0, -1).filter(m => m.content !== '' || m.generatedImage);
-
-    const response = await fetch(`${API_BASE_URL}/chat`, {
+    const response = await fetch(`${API_URL}/chat`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        history: historyPayload,
-        message,
-        attachments,
-        systemInstruction
-      }),
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
       signal
     });
 
     if (!response.ok) {
-      throw new Error(`Backend API Error: ${response.statusText}`);
+        const errorText = await response.text();
+        // Try to parse JSON error if possible
+        try {
+            const errorJson = JSON.parse(errorText);
+            throw new Error(errorJson.error || errorText);
+        } catch {
+            throw new Error(`Server Error (${response.status}): ${errorText}`);
+        }
     }
 
-    if (!response.body) throw new Error('ReadableStream not supported.');
+    if (!response.body) throw new Error("No response body");
 
+    // 2. Handle SSE Stream
     const reader = response.body.getReader();
-    const decoder = new TextDecoder();
+    const decoder = new TextDecoder("utf-8");
+    let buffer = "";
 
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
-
-      const chunk = decoder.decode(value);
-      const lines = chunk.split('\n');
       
+      const chunk = decoder.decode(value, { stream: true });
+      buffer += chunk;
+      
+      const lines = buffer.split("\n\n");
+      buffer = lines.pop() || "";
+
       for (const line of lines) {
-        if (line.startsWith('data: ')) {
-          const dataStr = line.slice(6);
-          if (dataStr === '[DONE]') continue;
-          
-          try {
+        const trimmedLine = line.trim();
+        if (!trimmedLine.startsWith("data: ")) continue;
+        
+        const dataStr = trimmedLine.substring(6);
+        if (dataStr === "[DONE]") continue;
+
+        try {
             const data = JSON.parse(dataStr);
-            if (data.error) throw new Error(data.error);
-            if (data.text) {
-              fullText += data.text;
-              onChunk(data.text);
+            if (data.text !== undefined) {
+                onChunk(data.text);
+            } else if (data.error) {
+                throw new Error(data.error);
             }
-          } catch (e) {
-            console.warn("Error parsing stream chunk", e);
-          }
+        } catch (e) {
+            // Ignore JSON parse errors for partial chunks or logging
+            console.warn("Parse error for chunk:", dataStr);
         }
       }
     }
 
-  } catch (error) {
-    if (signal?.aborted) {
-      return fullText;
-    }
-    console.error("Error streaming message:", error);
+  } catch (error: any) {
+    if (signal?.aborted) return "";
+    console.error("Stream Error:", error);
     throw error;
   }
 
-  return fullText;
+  return "";
 };
 
-/**
- * Generates an image using the backend
- */
 export const generateImage = async (prompt: string): Promise<string> => {
   try {
-    const response = await fetch(`${API_BASE_URL}/generate-image`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({ prompt }),
+    const response = await fetch(`${API_URL}/generate-image`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prompt })
     });
 
     if (!response.ok) {
-      throw new Error(`Backend API Error: ${response.statusText}`);
+        const errText = await response.text();
+        try {
+             const errJson = JSON.parse(errText);
+             throw new Error(errJson.error || errText);
+        } catch {
+             throw new Error(`Failed: ${errText}`);
+        }
     }
 
     const data = await response.json();
     return data.imageBytes;
-  } catch (error) {
-    console.error("Error generating image:", error);
-    throw error;
+    
+  } catch (error: any) {
+    console.error("Image Gen Error:", error);
+    throw new Error(error.message || "Failed to generate image");
   }
-};
-
-// Helper to keep the existing API signature mostly compatible but unnecessary for backend logic
-export const initChatSession = (systemInstruction: string = "") => {
-  // This is now stateless on the frontend side, handled per request by backend.
-  // We just store the instruction to pass it with every request.
-  sessionStorage.setItem('bach_ai_instruction', systemInstruction);
-};
-
-export const getSystemInstruction = () => {
-  return sessionStorage.getItem('bach_ai_instruction') || "";
 };

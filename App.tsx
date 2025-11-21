@@ -1,6 +1,6 @@
 
 import React, { useState, useRef, useEffect } from 'react';
-import { Send, Paperclip, X, Menu, Square } from 'lucide-react';
+import { Send, Paperclip, X, Menu, Square, Settings, AlertCircle } from 'lucide-react';
 import { initChatSession, streamMessage, generateImage, getSystemInstruction } from './services/geminiService';
 import { Message, Role, AppMode, Attachment } from './types';
 import { ChatMessage } from './components/ChatMessage';
@@ -166,13 +166,14 @@ const App: React.FC = () => {
         // Get instruction from session storage (set by initChatSession)
         const sysInstruction = getSystemInstruction();
         
-        // Pass the HISTORY (updatedMessages) to the backend service
+        // Pass the HISTORY (updatedMessages) to the service which now calls SDK directly
         await streamMessage(
           updatedMessages, // Pass full history
           userMessageText, 
           currentAttachments,
           sysInstruction,
           (chunk) => {
+            // Simply append chunk
             accumulatedText += chunk;
             setMessages(prev => 
               prev.map(msg => 
@@ -185,13 +186,17 @@ const App: React.FC = () => {
           abortControllerRef.current.signal
         );
       }
-    } catch (error) {
+    } catch (error: any) {
       // Only show error if not aborted
       if (!abortControllerRef.current?.signal.aborted) {
         setMessages(prev => 
           prev.map(msg => 
             msg.id === aiMessageId 
-              ? { ...msg, content: "Xin lỗi, không thể kết nối tới Server. Hãy đảm bảo bạn đang chạy Backend tại localhost:5000.", isError: true } 
+              ? { 
+                  ...msg, 
+                  content: `⚠️ **Lỗi:** ${error.message || "Có lỗi xảy ra khi kết nối tới AI."}`, 
+                  isError: true 
+                } 
               : msg
           )
         );
@@ -258,7 +263,6 @@ const App: React.FC = () => {
 
         {/* Chat Area */}
         <main className="flex-1 overflow-y-auto p-0 z-10 custom-scrollbar scroll-smooth relative">
-          {/* Adjusted max-width to 4xl and reduced padding to px-2 md:px-4 */}
           <div className="max-w-4xl mx-auto pt-4 md:pt-6 pb-10 px-2 md:px-4">
             {messages.map((msg) => (
               <ChatMessage key={msg.id} message={msg} />
@@ -284,76 +288,78 @@ const App: React.FC = () => {
         </main>
 
         {/* Input Area */}
-        <footer className="p-4 bg-transparent z-20">
-          <div className="max-w-4xl mx-auto">
-            
-            {/* Attachment Preview */}
-            {attachments.length > 0 && (
-              <div className="flex gap-2 mb-2 overflow-x-auto p-1">
-                {attachments.map((att, idx) => (
-                  <div key={idx} className="relative group">
-                    <img 
-                      src={`data:${att.mimeType};base64,${att.data}`} 
-                      alt="preview" 
-                      className="h-16 w-16 object-cover rounded-lg border border-slate-700"
-                    />
-                    <button 
-                      onClick={() => removeAttachment(idx)}
-                      className="absolute -top-1.5 -right-1.5 bg-slate-800 text-white rounded-full p-0.5 shadow-md border border-slate-600 hover:bg-red-500 transition-colors"
-                    >
-                      <X size={12} />
-                    </button>
-                  </div>
-                ))}
+        <footer className="z-20">
+          <div className="p-4 bg-transparent">
+            <div className="max-w-4xl mx-auto">
+              
+              {/* Attachment Preview */}
+              {attachments.length > 0 && (
+                <div className="flex gap-2 mb-2 overflow-x-auto p-1">
+                  {attachments.map((att, idx) => (
+                    <div key={idx} className="relative group">
+                      <img 
+                        src={`data:${att.mimeType};base64,${att.data}`} 
+                        alt="preview" 
+                        className="h-16 w-16 object-cover rounded-lg border border-slate-700"
+                      />
+                      <button 
+                        onClick={() => removeAttachment(idx)}
+                        className="absolute -top-1.5 -right-1.5 bg-slate-800 text-white rounded-full p-0.5 shadow-md border border-slate-600 hover:bg-red-500 transition-colors"
+                      >
+                        <X size={12} />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              <div className="relative flex items-end gap-2 bg-slate-800/80 backdrop-blur border border-slate-700 rounded-xl p-3 shadow-2xl focus-within:ring-1 focus-within:ring-slate-500 transition-all">
+                  
+                  {/* File Upload Button */}
+                  <input 
+                      type="file" 
+                      ref={fileInputRef}
+                      onChange={handleFileSelect}
+                      className="hidden"
+                      accept="image/*"
+                  />
+                  <button 
+                      onClick={() => fileInputRef.current?.click()}
+                      className="p-2 text-slate-400 hover:text-white hover:bg-slate-700 rounded-lg transition-colors mb-0.5"
+                      title="Thêm ảnh"
+                      disabled={mode === AppMode.IMAGE_GEN}
+                  >
+                      <Paperclip size={20} />
+                  </button>
+
+                  <textarea
+                      ref={textareaRef}
+                      value={input}
+                      onChange={(e) => setInput(e.target.value)}
+                      onKeyDown={handleKeyDown}
+                      placeholder={mode === AppMode.IMAGE_GEN ? "Mô tả hình ảnh bạn muốn tạo..." : "Gửi tin nhắn cho BACH AI..."}
+                      className="w-full bg-transparent text-white placeholder-slate-400 px-2 py-2 max-h-[200px] resize-none outline-none custom-scrollbar"
+                      rows={1}
+                  />
+                  
+                  <button
+                      onClick={isLoading ? handleStop : handleSendMessage}
+                      disabled={!isLoading && (!input.trim() && attachments.length === 0)}
+                      className={`p-2 rounded-lg mb-0.5 transition-all duration-200 ${
+                          isLoading
+                            ? 'bg-white text-black hover:bg-gray-200' 
+                            : (input.trim() || attachments.length > 0)
+                              ? 'bg-white text-black hover:bg-slate-200'
+                              : 'bg-slate-700 text-slate-500 cursor-not-allowed'
+                      }`}
+                  >
+                      {isLoading ? <Square size={20} fill="currentColor" /> : <Send size={20} />}
+                  </button>
               </div>
-            )}
-
-            <div className="relative flex items-end gap-2 bg-slate-800/80 backdrop-blur border border-slate-700 rounded-xl p-3 shadow-2xl focus-within:ring-1 focus-within:ring-slate-500 transition-all">
-                
-                {/* File Upload Button */}
-                <input 
-                    type="file" 
-                    ref={fileInputRef}
-                    onChange={handleFileSelect}
-                    className="hidden"
-                    accept="image/*"
-                />
-                <button 
-                    onClick={() => fileInputRef.current?.click()}
-                    className="p-2 text-slate-400 hover:text-white hover:bg-slate-700 rounded-lg transition-colors mb-0.5"
-                    title="Thêm ảnh"
-                    disabled={mode === AppMode.IMAGE_GEN}
-                >
-                    <Paperclip size={20} />
-                </button>
-
-                <textarea
-                    ref={textareaRef}
-                    value={input}
-                    onChange={(e) => setInput(e.target.value)}
-                    onKeyDown={handleKeyDown}
-                    placeholder={mode === AppMode.IMAGE_GEN ? "Mô tả hình ảnh bạn muốn tạo..." : "Gửi tin nhắn cho BACH AI..."}
-                    className="w-full bg-transparent text-white placeholder-slate-400 px-2 py-2 max-h-[200px] resize-none outline-none custom-scrollbar"
-                    rows={1}
-                />
-                
-                <button
-                    onClick={isLoading ? handleStop : handleSendMessage}
-                    disabled={!isLoading && (!input.trim() && attachments.length === 0)}
-                    className={`p-2 rounded-lg mb-0.5 transition-all duration-200 ${
-                        isLoading
-                          ? 'bg-white text-black hover:bg-gray-200' 
-                          : (input.trim() || attachments.length > 0)
-                            ? 'bg-white text-black hover:bg-slate-200'
-                            : 'bg-slate-700 text-slate-500 cursor-not-allowed'
-                    }`}
-                >
-                    {isLoading ? <Square size={20} fill="currentColor" /> : <Send size={20} />}
-                </button>
+              <p className="text-center text-[10px] text-slate-500 mt-2 font-mono">
+                  BACH AI có thể mắc lỗi. Hãy kiểm tra thông tin quan trọng.
+              </p>
             </div>
-            <p className="text-center text-[10px] text-slate-500 mt-2 font-mono">
-                BACH AI có thể mắc lỗi. Hãy kiểm tra thông tin quan trọng.
-            </p>
           </div>
         </footer>
       </div>
